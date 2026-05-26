@@ -814,21 +814,37 @@ pub fn parse_style_sections<'a>(
 ) -> LineSections<'a, Style> {
     let empty_map = HashMap::new();
     let styles_map = config.styles_map.as_ref().unwrap_or(&empty_map);
-    ansi::parse_style_sections(raw_line)
+    let to_style = |original_style: ansi_term::Style| {
+        match styles_map.get(&style::ansi_term_style_equality_key(original_style)) {
+            Some(mapped_style) => *mapped_style,
+            None => Style {
+                ansi_term_style: original_style,
+                ..Style::default()
+            },
+        }
+    };
+    let mut sections: LineSections<Style> = ansi::parse_style_sections(raw_line)
         .iter()
-        .map(|(original_style, s)| {
-            match styles_map.get(&style::ansi_term_style_equality_key(*original_style)) {
-                Some(mapped_style) => (*mapped_style, *s),
-                None => (
-                    Style {
-                        ansi_term_style: *original_style,
-                        ..Style::default()
-                    },
-                    *s,
-                ),
+        .map(|(original_style, s)| (to_style(*original_style), *s))
+        .collect();
+    // git puts a moved blank line's color on the `-`/`+` marker only; prepare_raw_line
+    // strips the marker, leaving an SGR that colors no text, which the parse above drops.
+    // If the line is blank and colorless, recover that leading style so the empty line
+    // still carries (and maps through styles_map) the move color.
+    if sections
+        .iter()
+        .all(|(style, s)| s.trim().is_empty() && style.get_background_color().is_none())
+    {
+        if let Some(leading) = ansi::parse_first_style(raw_line) {
+            let recovered = to_style(leading);
+            if recovered.get_background_color().is_some() {
+                // Carry the recovered color on a zero-width section so it survives the
+                // "\n" filtering in last_painted_style and reaches the fill.
+                sections.insert(0, (recovered, ""));
             }
-        })
-        .collect()
+        }
+    }
+    sections
 }
 
 #[allow(clippy::too_many_arguments)]
