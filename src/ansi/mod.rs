@@ -117,19 +117,20 @@ pub fn parse_style_sections(s: &str) -> Vec<(ansi_term::Style, &str)> {
     sections
 }
 
-// Return the first CSI element, if any, as an `ansi_term::Style`.
-pub fn parse_first_style(s: &str) -> Option<ansi_term::Style> {
-    AnsiElementIterator::new(s).find_map(|el| match el {
-        Element::Sgr(style, _, _) => Some(style),
+// The style of the string's leading SGR, only if it opens with one (else None).
+// git colors a diff line by emitting its style at byte 0 — before the +/- marker —
+// and resetting at the newline, so a line's opening sequence is its whole color.
+// Reading only the leading element, not the first SGR anywhere, keeps intra-line
+// word/whitespace emphasis from being mistaken for the line's style.
+pub fn parse_leading_style(s: &str) -> Option<ansi_term::Style> {
+    match AnsiElementIterator::new(s).next() {
+        Some(Element::Sgr(style, _, _)) => Some(style),
         _ => None,
-    })
+    }
 }
 
 pub fn string_starts_with_ansi_style_sequence(s: &str) -> bool {
-    AnsiElementIterator::new(s)
-        .next()
-        .map(|el| matches!(el, Element::Sgr(_, _, _)))
-        .unwrap_or(false)
+    parse_leading_style(s).is_some()
 }
 
 /// Return string formed from a byte slice starting at byte position `start`, where the index
@@ -221,7 +222,7 @@ mod tests {
 
     // Note that src/ansi/console_tests.rs contains additional test coverage for this module.
     use super::{
-        ansi_preserving_index, ansi_preserving_slice, measure_text_width, parse_first_style,
+        ansi_preserving_index, ansi_preserving_slice, measure_text_width, parse_leading_style,
         string_starts_with_ansi_style_sequence, strip_ansi_codes, truncate_str, truncate_str_short,
     };
 
@@ -261,9 +262,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_first_style() {
+    fn test_parse_leading_style() {
         let minus_line_from_unconfigured_git = "\x1b[31m-____\x1b[m\n";
-        let style = parse_first_style(minus_line_from_unconfigured_git);
+        let style = parse_leading_style(minus_line_from_unconfigured_git);
         let expected_style = ansi_term::Style {
             foreground: Some(ansi_term::Color::Red),
             ..ansi_term::Style::default()

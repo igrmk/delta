@@ -828,7 +828,7 @@ pub fn line_background_from_git(state: &State, config: &config::Config) -> Optio
         | State::HunkPlus(_, Some(raw)) => raw,
         _ => return None,
     };
-    ansi::parse_first_style(raw_line).map(|s| map_ansi_term_style(s, config))
+    ansi::parse_leading_style(raw_line).map(|s| map_ansi_term_style(s, config))
 }
 
 // Parse ANSI styles encountered in `raw_line` and apply `styles_map`.
