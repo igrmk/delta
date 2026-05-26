@@ -474,7 +474,10 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
     let mut diff = MinusPlus::new(diff.minus.into_iter(), diff.plus.into_iter());
     let mut wrapinfo = MinusPlus::new(wrapinfo[Left].iter(), wrapinfo[Right].iter());
 
-    let fill_style = MinusPlus::new(&config.minus_style, &config.plus_style);
+    // Fill style for wrap symbols and right-aligned padding.
+    let standalone_fill_style = MinusPlus::new(&config.minus_style, &config.plus_style);
+    let homolog_fill_style =
+        MinusPlus::new(&config.minus_non_emph_style, &config.plus_non_emph_style);
 
     // Internal helper function to perform wrapping for both the syntax and the
     // diff highlighting (SyntectStyle and Style).
@@ -489,6 +492,7 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
         line: &str,
         line_width: usize,
         fill_style: &Style,
+        fill_from_content: bool,
         errhint: &'a str,
     ) -> (usize, usize)
     where
@@ -532,15 +536,32 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
             None
         };
 
+        let diff_sections = diff_iter
+            .next()
+            .unwrap_or_else(|| panic!("bad diff alignment {}", errhint));
+
+        // A standalone line has one background; if map-styles repainted it, the
+        // wrap symbol and padding must follow that paint, not minus/plus-style.
+        // Homolog pairs keep the passed non-emph fill.
+        let diff_fill_style = if fill_from_content {
+            diff_sections
+                .iter()
+                .rev()
+                .filter(|(_, s)| s != &"\n")
+                .map(|(style, _)| *style)
+                .next()
+                .unwrap_or(*fill_style)
+        } else {
+            *fill_style
+        };
+
         let (start2, extended_to2) = wrap_if_too_long(
             config,
             wrapped_diff,
-            diff_iter
-                .next()
-                .unwrap_or_else(|| panic!("bad diff alignment {}", errhint)),
+            diff_sections,
             must_wrap,
             line_width,
-            fill_style,
+            &diff_fill_style,
             &inline_hint_style,
             &cuts,
         );
@@ -558,17 +579,18 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
 
     // This macro avoids having the same code block 4x in the alignment processing
     macro_rules! wrap_and_assert {
-        ($side:tt, $errhint:tt, $have:tt, $expected:tt) => {{
+        ($side:tt, $fill_style:expr, $fill_from_content:expr, $errhint:tt, $have:tt, $expected:tt) => {{
             assert_eq!(*$have, $expected, "bad alignment index {}", $errhint);
             $expected += 1;
 
             // The wrap symbol and padding take the line's git background (see
-            // `line_background_from_git`), falling back to the nominal minus/plus style.
+            // `line_background_from_git`), falling back to the homolog/standalone style
+            // passed by the caller. line_fill is the final fill, so no content-derivation.
             let line_fill = lines_background[$side]
                 .get(*$have)
                 .copied()
                 .flatten()
-                .unwrap_or(*fill_style[$side]);
+                .unwrap_or(*$fill_style[$side]);
             wrap_syntax_and_diff(
                 &config,
                 &mut new_wrapped_syntax[$side],
@@ -579,6 +601,7 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
                 lines[$side][*$have].0.as_str(),
                 line_width[$side],
                 &line_fill,
+                false,
                 $errhint,
             )
         }};
@@ -592,7 +615,8 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
     for (minus, plus) in alignment {
         let (minus_extended, plus_extended) = match (minus, plus) {
             (Some(m), None) => {
-                let (minus_start, extended_to) = wrap_and_assert!(Left, "[*l*] (-)", m, m_expected);
+                let (minus_start, extended_to) =
+                    wrap_and_assert!(Left, standalone_fill_style, true, "[*l*] (-)", m, m_expected);
 
                 for i in minus_start..extended_to {
                     new_alignment.push((Some(i), None));
@@ -601,7 +625,8 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
                 (extended_to - minus_start, 0)
             }
             (None, Some(p)) => {
-                let (plus_start, extended_to) = wrap_and_assert!(Right, "(-) [*r*]", p, p_expected);
+                let (plus_start, extended_to) =
+                    wrap_and_assert!(Right, standalone_fill_style, true, "(-) [*r*]", p, p_expected);
 
                 for i in plus_start..extended_to {
                     new_alignment.push((None, Some(i)));
@@ -611,9 +636,9 @@ pub fn wrap_minusplus_block<'c: 'a, 'a>(
             }
             (Some(m), Some(p)) => {
                 let (minus_start, m_extended_to) =
-                    wrap_and_assert!(Left, "[*l*] (r)", m, m_expected);
+                    wrap_and_assert!(Left, homolog_fill_style, false, "[*l*] (r)", m, m_expected);
                 let (plus_start, p_extended_to) =
-                    wrap_and_assert!(Right, "(l) [*r*]", p, p_expected);
+                    wrap_and_assert!(Right, homolog_fill_style, false, "(l) [*r*]", p, p_expected);
 
                 for (new_m, new_p) in (minus_start..m_extended_to).zip(plus_start..p_extended_to) {
                     new_alignment.push((Some(new_m), Some(new_p)));
@@ -1476,5 +1501,60 @@ index 223ca50..e69de29 100644
                     │    │                              │    │3.........4.........5........>"#,
                 );
         }
+    }
+
+    #[test]
+    fn test_homolog_wrap_fill_uses_non_emph_style() {
+        // On a homolog pair, the wrap continuation symbols and any padding
+        // sit inside the same unbroken `*-non-emph-style` bg span
+        // as the surrounding wrapped content (no intervening bg SGR between them).
+        //
+        // Width 109 makes the content wrap to exactly 2 lines with the second one right-aligned:
+        // row 1 ends with `<` (wrap-right-symbol);
+        // row 2 begins with leading padding spaces then `>` (wrap-right-prefix).
+        let t = DeltaTest::with_args(&default_wrap_cfg_plus(&[
+            "--side-by-side",
+            "--width",
+            "109",
+            "--minus-style",
+            "normal magenta",
+            "--minus-emph-style",
+            "normal brightred",
+            "--minus-non-emph-style",
+            "normal red",
+            "--plus-style",
+            "normal cyan",
+            "--plus-emph-style",
+            "normal brightgreen",
+            "--plus-non-emph-style",
+            "normal green",
+        ]))
+        .with_input(HUNK_MP_DIFF);
+        let raw = &t.raw_output;
+
+        // Wrap symbol on minus line 1 shares the line's non-emph (dark red) bg.
+        assert!(
+            raw.contains("\x1b[41m = 0123456789 0123456789 0123456789 0123456789<"),
+            "minus-side line 1: non-emph bg span is broken before `<`:\n{}",
+            raw
+        );
+        // Leading padding + `>` on minus line 2 share the non-emph (dark red) bg.
+        assert!(
+            raw.contains("\x1b[41m                                    > 0123456789"),
+            "minus-side line 2: non-emph bg span doesn't cover pad+`>`:\n{}",
+            raw
+        );
+        // Wrap symbol on plus line 1 shares the line's non-emph (dark green) bg.
+        assert!(
+            raw.contains("\x1b[42m = 0123456789 0123456789 0123456789 0123456789<"),
+            "plus-side line 1: non-emph bg span is broken before `<`:\n{}",
+            raw
+        );
+        // Leading padding + `>` on plus line 2 share the non-emph (dark green) bg.
+        assert!(
+            raw.contains("\x1b[42m                                    > 0123456789"),
+            "plus-side line 2: non-emph bg span doesn't cover pad+`>`:\n{}",
+            raw
+        );
     }
 }
