@@ -120,8 +120,6 @@ pub fn parse_style_sections(s: &str) -> Vec<(ansi_term::Style, &str)> {
 // The style of the string's leading SGR, only if it opens with one (else None).
 // git colors a diff line by emitting its style at byte 0 — before the +/- marker —
 // and resetting at the newline, so a line's opening sequence is its whole color.
-// Reading only the leading element, not the first SGR anywhere, keeps intra-line
-// word/whitespace emphasis from being mistaken for the line's style.
 pub fn parse_leading_style(s: &str) -> Option<ansi_term::Style> {
     match AnsiElementIterator::new(s).next() {
         Some(Element::Sgr(style, _, _)) => Some(style),
