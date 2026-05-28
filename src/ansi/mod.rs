@@ -118,8 +118,9 @@ pub fn parse_style_sections(s: &str) -> Vec<(ansi_term::Style, &str)> {
 }
 
 // The style of the string's leading SGR, only if it opens with one (else None).
-// git colors a diff line by emitting its style at byte 0 — before the +/- marker —
-// and resetting at the newline, so a line's opening sequence is its whole color.
+// Handy for diff lines in particular: git emits a line's style at byte 0 — before
+// the +/- marker — and resets at the newline, so the opening sequence is the whole
+// line's color.
 pub fn parse_leading_style(s: &str) -> Option<ansi_term::Style> {
     match AnsiElementIterator::new(s).next() {
         Some(Element::Sgr(style, _, _)) => Some(style),

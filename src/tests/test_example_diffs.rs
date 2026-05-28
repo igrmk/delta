@@ -37,11 +37,25 @@ mod tests {
             "bold magenta => normal #abcdef",
         ])
         .with_input(input);
-        // The moved line (incl. its wrapped continuation and wrap symbol) and the blank
-        // moved line are filled with the mapped color #abcdef.
+        // The mapped color #abcdef fills the moved line -- its wrapped continuation and
+        // wrap symbol included.
         assert!(
             out.raw_output.contains("48;2;171;205;239"),
             "moved/wrapped lines should be filled with the mapped color:\n{}",
+            out.raw_output
+        );
+        // The blank moved line gets it too, pinned to its own row: that row carries the
+        // mapped fill but no content text (the wrapped rows all contain letters; the
+        // blank one does not).
+        let blank_row_is_mapped = out.raw_output.lines().any(|line| {
+            line.contains("48;2;171;205;239")
+                && !strip_ansi_codes(line)
+                    .chars()
+                    .any(|c| c.is_ascii_alphabetic())
+        });
+        assert!(
+            blank_row_is_mapped,
+            "the blank moved line's row should be filled with the mapped color:\n{}",
             out.raw_output
         );
         // Nothing falls back to minus-style #d6a29f -- the panel-fill / blank-moved bug.
